@@ -23,6 +23,58 @@ module COS
       @config = config
     end
 
+    # 生成签名headers
+    #
+    # @see https://cloud.tencent.com/document/product/436/7778#signature
+    #
+    # @note COS基于密钥 HMAC 的自定义 HTTP 方案进行身份验证
+    #
+    # @param method [String] HTTP 请求方法
+    # @param uri [String] HTTP 请求 URI 部分 即从“/”虚拟根路径开始部分
+    # @param parameters [Hash] HTTP 请求参数
+    # @param headers [Hash] HTTP 请求header
+    #
+    # @return [Hash] 加入Authorization的签名headers
+    def authorization(method, uri = '/', parameters = {}, headers = {})
+      current_date = Time.now
+      start = current_date.to_i
+      expire = start + 60 * 30
+      # 临时密钥的有效起止时间
+      q_key_time = start.to_s + ';' + expire.to_s
+
+      sign_key = OpenSSL::HMAC.hexdigest('sha1', config.secret_key, q_key_time)
+      format_param = URI.encode_www_form(parameters)
+      format_header = URI.encode_www_form(headers)
+
+      # 签名
+      # [HttpMethod]\n[HttpURI]\n[HttpParameters]\n[HttpHeaders]\n
+      http_string = method + "\n" + uri + "\n" + format_param + "\n" + format_header + "\n"
+      sha1_string = Digest::SHA1.hexdigest http_string
+      # [q-sign-algorithm]\n[q-sign-time]\nsha1($HttpString)\n
+      string_to_signature = 'sha1' + "\n" + q_key_time + "\n" + sha1_string + "\n"
+
+      signature_key = OpenSSL::HMAC.hexdigest('sha1', sign_key, string_to_signature)
+
+      authorization_dict = {
+          'q-sign-algorithm': 'sha1',
+          'q-ak': config.secret_id,
+          'q-sign-time': q_key_time,
+          'q-key-time': q_key_time,
+          'q-header-list': headers.keys.join(';'),
+          'q-url-param-list': '',
+          'q-signature': signature_key
+      }
+      key_arr = []
+      authorization_dict.each {|key, value|
+        key_arr.push key.to_s + '=' + value
+      }
+      key_string = key_arr.join '&'
+
+      headers['date'] = current_date.strftime('%a, %d %b %Y %H:%M:%S GMT')
+      headers['authorization'] = key_string
+      headers
+    end
+
     # 单次有效签名
     #
     # @see http://www.qcloud.com/wiki/%E9%89%B4%E6%9D%83%E6%8A%80%E6%9C%AF%E6%9C%8D%E5%8A%A1%E6%96%B9%E6%A1%88#1_.E7.AD.BE.E5.90.8D.E4.B8.8E.E9.89.B4.E6.9D.83
